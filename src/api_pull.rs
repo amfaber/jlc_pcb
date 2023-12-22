@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 use tokio::sync::mpsc::Sender;
 
 use crate::{models::ComponentInfo, database::last_api_key};
@@ -13,17 +13,18 @@ struct Token {
 
 #[derive(Deserialize, Debug, PartialEq, Eq)]
 #[allow(unused, non_snake_case)]
-struct Data {
-    componentInfos: Option<Vec<ComponentInfo>>,
-    lastKey: String,
+#[serde(rename_all = "camelCase")]
+pub struct Data {
+    pub component_infos: Option<Vec<ComponentInfo>>,
+    pub last_key: Option<String>,
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq)]
-struct ComponentInfoResponse {
-    success: bool,
-    code: i32,
-    data: Option<Data>,
-    message: Option<String>,
+pub struct ComponentInfoResponse {
+    pub success: bool,
+    pub code: i32,
+    pub data: Option<Data>,
+    pub message: Option<String>,
 }
 
 pub async fn pull_from_api(sender: Sender<Vec<ComponentInfo>>) {
@@ -45,8 +46,6 @@ pub async fn pull_from_api(sender: Sender<Vec<ComponentInfo>>) {
         .unwrap();
 
     let mut last_key = last_api_key();
-    dbg!(&last_key);
-
     loop {
         let mut builder = client.post("https://jlcpcb.com/external/component/getComponentInfos");
         if let Some(last_key) = &last_key {
@@ -61,22 +60,22 @@ pub async fn pull_from_api(sender: Sender<Vec<ComponentInfo>>) {
             .error_for_status()
             .unwrap();
 
-        // dbg!(&resp.text().await.unwrap()[..150]);
-        // panic!("");
-
         let resp = resp.json::<ComponentInfoResponse>().await.unwrap();
 
         if let Some(data) = resp.data {
-            match data.componentInfos {
+            match data.component_infos {
                 Some(mut components) => {
                     components.iter_mut().for_each(|component|{
                         component.api_last_key = last_key.clone();
                     });
                     sender.send(components).await.unwrap();
                 }
-                None => break,
+                None => (),
             };
-            last_key = Some(data.lastKey);
+            match data.last_key{
+                Some(this_last_key) => last_key = Some(this_last_key),
+                None => break,
+            }
         } else {
             if resp.code == 429 {
                 std::thread::sleep(Duration::from_secs_f32(2.));

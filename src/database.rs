@@ -1,20 +1,25 @@
-use std::{env, time::Instant};
+use std::env;
 
 use diesel::{
-    pg::PgConnection, upsert::excluded, Connection, ExpressionMethods,
-    QueryDsl, RunQueryDsl, SelectableHelper,
+    pg::PgConnection, upsert::excluded, Connection, ExpressionMethods, QueryDsl, RunQueryDsl,
+    SelectableHelper, TextExpressionMethods, sql_types::{SingleValue, SqlType}, Expression, expression::{ValidGrouping, MixedAggregates},
+};
+use diesel_full_text_search::{
+    configuration::{TsConfiguration, TsConfigurationByName},
+    to_tsquery_with_search_config, to_tsvector_with_search_config, TextOrNullableText,
 };
 #[allow(unused)]
 use diesel_full_text_search::{to_tsquery, to_tsvector, TsVectorExtensions};
+use diesel_logger::LoggingConnection;
 use dotenvy::dotenv;
 use tokio::sync::mpsc::Receiver;
 
 use crate::models::{ComponentInfo, ComponentInfoWithTime};
 
-pub fn establish_connection() -> PgConnection {
+pub fn establish_connection() -> LoggingConnection<PgConnection> {
     dotenv().unwrap();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgConnection::establish(&database_url).unwrap()
+    LoggingConnection::new(PgConnection::establish(&database_url).unwrap())
 }
 
 pub async fn insert_components(mut receiver: Receiver<Vec<ComponentInfo>>) {
@@ -66,17 +71,22 @@ pub fn last_api_key() -> Option<String> {
         .flatten()
 }
 
-pub fn get_components() -> Vec<ComponentInfoWithTime> {
+pub fn get_components(search_term: Option<&str>) -> Vec<ComponentInfoWithTime> 
+{
     use crate::schema::components::dsl::*;
     let mut connection = establish_connection();
-    let now = Instant::now();
-    // let search = to_tsquery("trans:*");
-    let out = components
-        // .filter(to_tsvector(description).matches(search))
-        // .filter(lcsc_part.eq("C15749"))
-        .select((ComponentInfo::as_select(), created, updated))
-        .load(&mut connection)
-        .unwrap();
-    dbg!(now.elapsed());
-    out
+    if let Some(search) = search_term{
+        let field = to_tsvector_with_search_config(TsConfigurationByName("english"), description);
+        let search = to_tsquery_with_search_config(TsConfigurationByName("english"), search);
+        components
+            .filter(field.matches(search))
+            .select((ComponentInfo::as_select(), created, updated))
+            .load(&mut connection)
+            .unwrap()
+    } else {
+        components
+            .select((ComponentInfo::as_select(), created, updated))
+            .load(&mut connection)
+            .unwrap()
+    }
 }
